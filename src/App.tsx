@@ -5,7 +5,7 @@
 // Estilo: Institucional McKinsey — azul marino, blanco, dorado.
 // =============================================================================
 
-import { useState } from "react";
+import React, { useState } from "react";
 
 // =============================================================================
 // SECCIÓN 1: TIPOS TypeScript
@@ -701,7 +701,7 @@ const PAGE_META: Record<PanelId, { eyebrow: string; title: string; desc: string;
   rates:   { eyebrow:"Sección 1 — FM",     title:"Conversión de\nTasas de Interés",   desc:"Equivalencias entre tasas nominales, efectivas y fuerza de interés.", fm:"FM Section 1: Interest Rate Measurement" },
 };
 
-const PANELS: Record<PanelId, JSX.Element> = {
+const PANELS: Record<PanelId, React.ReactElement> = {
   tvm:     <TVMPanel />,
   annuity: <AnnuityPanel />,
   amort:   <AmortPanel />,
