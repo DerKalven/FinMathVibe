@@ -1,17 +1,34 @@
 // =============================================================================
 // FIXED INCOME RISK ANALYZER — Módulo 1: Time Value Engine
 // =============================================================================
-// Stack: React + TypeScript, CSS-in-JS, sin dependencias externas.
+// Stack: React + TypeScript + FastAPI backend
 // Estilo: Institucional McKinsey — azul marino, blanco, dorado.
+//
+// ARQUITECTURA:
+//   Este archivo NO hace ningún cálculo matemático.
+//   Cada vez que el usuario presiona "Calcular", React hace un POST al backend
+//   FastAPI (Python) que devuelve el resultado como JSON.
+//
+//   React (Vercel) ──POST /tvm──► FastAPI (Railway) ──JSON──► React (muestra)
+//
+// CONFIGURACIÓN:
+//   Cambia API_BASE_URL a la URL de tu backend en Railway.
+//   Ejemplo: "https://finmath-api.up.railway.app"
 // =============================================================================
 
-import React, { useState } from "react";
+import { useState } from "react";
+
+// =============================================================================
+// CONFIGURACIÓN DEL BACKEND
+// =============================================================================
+// Esta es la única línea que debes cambiar cuando despliegues el backend.
+// Mientras desarrollas localmente: "http://localhost:8000"
+// En producción (Railway): "https://TU-APP.up.railway.app"
+// =============================================================================
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 // =============================================================================
 // SECCIÓN 1: TIPOS TypeScript
-// =============================================================================
-// Definimos interfaces para que TypeScript entienda la forma de cada objeto.
-// Esto elimina todos los errores "property does not exist" del build.
 // =============================================================================
 
 interface TVMResult {
@@ -28,8 +45,8 @@ interface AnnuityResult {
   fv: number;
   label: string;
   formula: string;
-  totalPmts: number;
-  totalInterest: number;
+  total_pmts: number;
+  total_interest: number;
 }
 
 interface AmortRow {
@@ -38,25 +55,78 @@ interface AmortRow {
   interest: number;
   principal: number;
   extra: number;
-  totalPaid: number;
   balance: number;
-  isCancelled: boolean;
+  is_cancelled: boolean;
+}
+
+interface AmortResult {
+  rows: AmortRow[];
+  total_interest: number;
+  total_pmt: number;
+  periods: number;
 }
 
 interface AmortSummary {
-  totalInterest: number;
-  totalPmt: number;
+  total_interest: number;
+  total_pmt: number;
   pv: number;
   periods: number;
-  interestSaved?: number;
-  periodsSaved?: number;
+  interest_saved?: number;
+  periods_saved?: number;
 }
 
-// Tipo para el mapa de abonos extraordinarios { período: monto }
+interface RateEquivalent {
+  label: string;
+  value: number;
+}
+
+interface RatesResult {
+  i_eff: number;
+  delta: number;
+  equivalents: RateEquivalent[];
+}
+
 type ExtraMap = Record<number, number>;
 
 // =============================================================================
-// SECCIÓN 2: ESTILOS GLOBALES
+// SECCIÓN 2: API CLIENT
+// =============================================================================
+// Funciones que encapsulan cada llamada HTTP al backend.
+// Todos los errores de red se manejan aquí para no contaminar los componentes.
+// =============================================================================
+
+/**
+ * apiPost — helper genérico para llamadas POST al backend.
+ *
+ * Patrón: fetch → JSON.stringify el body → parsear la respuesta.
+ * Si el backend devuelve un error HTTP (4xx/5xx), lanza una excepción
+ * con el mensaje del backend para mostrárselo al usuario.
+ */
+async function apiPost<T>(endpoint: string, body: object): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Error ${res.status} en ${endpoint}`);
+  }
+
+  return res.json() as Promise<T>;
+}
+
+// Funciones específicas — una por endpoint del backend
+const api = {
+  tvm:          (body: object) => apiPost<TVMResult>("/tvm", body),
+  annuity:      (body: object) => apiPost<AnnuityResult>("/annuity", body),
+  amortization: (body: object) => apiPost<AmortResult>("/amortization", body),
+  rates:        (body: object) => apiPost<RatesResult>("/rates", body),
+};
+
+// =============================================================================
+// SECCIÓN 3: ESTILOS GLOBALES (idénticos a la versión anterior)
 // =============================================================================
 
 const STYLES = `
@@ -79,7 +149,6 @@ const STYLES = `
   }
 
   body { background: var(--white); }
-
   .app { font-family: 'IBM Plex Mono', monospace; background: var(--white); min-height: 100vh; color: var(--ink); }
 
   .header { background: var(--navy); color: var(--white); padding: 0 48px; height: 64px; display: flex; align-items: center; border-bottom: 3px solid var(--gold); }
@@ -109,7 +178,7 @@ const STYLES = `
   .card { background: var(--white); border: 1px solid var(--rule); border-top: 3px solid var(--navy); padding: 28px; }
   .card-title { font-size: 8px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--gray-light); margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
 
-  .formula { background: var(--navy); color: rgba(255,255,255,0.85); padding: 12px 20px; font-size: 12px; font-style: italic; margin-bottom: 24px; border-left: 3px solid var(--gold); letter-spacing: 0.02em; }
+  .formula { background: var(--navy); color: rgba(255,255,255,0.85); padding: 12px 20px; font-size: 12px; font-style: italic; margin-bottom: 24px; border-left: 3px solid var(--gold); }
 
   .field { margin-bottom: 16px; }
   .field label { display: block; font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gray-mid); margin-bottom: 7px; }
@@ -118,6 +187,11 @@ const STYLES = `
 
   .btn { width: 100%; background: var(--navy); color: var(--white); border: none; padding: 13px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; cursor: pointer; transition: background 0.15s; margin-top: 8px; }
   .btn:hover { background: var(--blue-mid); }
+  .btn:disabled { background: var(--gray-light); cursor: not-allowed; }
+
+  /* Spinner de carga — visible mientras espera la respuesta del backend */
+  .btn.loading::after { content: " ◌"; animation: spin 1s linear infinite; display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .result-box { background: var(--result-bg); color: var(--white); padding: 28px; border-top: 3px solid var(--gold); }
   .result-label { font-size: 8px; letter-spacing: 0.2em; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-bottom: 8px; }
@@ -125,6 +199,9 @@ const STYLES = `
   .result-divider { border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 14px 0; }
   .result-detail { font-size: 11px; color: rgba(255,255,255,0.5); line-height: 1.9; }
   .result-hl { color: var(--gold); font-weight: 500; }
+
+  /* Error box — visible cuando el backend devuelve un error */
+  .error-box { background: #fff0f0; border: 1px solid #ffcccc; border-left: 3px solid #cc0000; padding: 14px 18px; font-size: 11px; color: #cc0000; margin-top: 16px; }
 
   .tabs { display: flex; border-bottom: 2px solid var(--rule); margin-bottom: 28px; }
   .tab { padding: 10px 24px; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; cursor: pointer; color: var(--gray-light); border-bottom: 3px solid transparent; margin-bottom: -2px; transition: all 0.15s; }
@@ -146,166 +223,79 @@ const STYLES = `
 
   .empty-state { height: 100%; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--gray-light); font-size: 11px; gap: 10px; border: 1px dashed var(--rule); }
   .empty-icon { font-size: 28px; opacity: 0.3; }
+
+  /* Indicador de backend conectado */
+  .api-indicator { display: flex; align-items: center; gap: 6px; font-size: 9px; color: rgba(255,255,255,0.4); margin-left: 20px; }
+  .api-dot { width: 6px; height: 6px; border-radius: 50%; background: #21c55d; animation: pulse 2s infinite; }
+  .api-dot.error { background: #cc0000; animation: none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 `;
 
 // =============================================================================
-// SECCIÓN 3: FUNCIONES MATEMÁTICAS
+// SECCIÓN 4: UTILIDADES DE FORMATO (solo presentación, no matemáticas)
 // =============================================================================
 
-/** Formatea número con separador de miles. Retorna "—" si no es válido. */
 const fmt = (n: number, d = 2): string =>
   isNaN(n) ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
-/** Convierte decimal a string de porcentaje con 4 decimales. */
 const fmtPct = (n: number, d = 4): string =>
   isNaN(n) ? "—" : (n * 100).toFixed(d) + "%";
 
-/**
- * effectiveRate — Convierte cualquier convención de tasa a tasa efectiva anual.
- * - "nominal":    (1 + rate/m)^m − 1
- * - "effective":  rate (sin transformación)
- * - "continuous": e^rate − 1
- */
-function effectiveRate(rate: number, m: number, conv = "nominal"): number {
-  if (conv === "continuous") return Math.exp(rate) - 1;
-  if (conv === "effective")  return rate;
-  return Math.pow(1 + rate / m, m) - 1;
-}
-
-/** FV = PV · (1 + i)^n */
-function calcFV(pv: number, i: number, n: number): number {
-  return pv * Math.pow(1 + i, n);
-}
-
-/** PV = FV · v^n   donde v = 1/(1+i) */
-function calcPV(fv: number, i: number, n: number): number {
-  return fv / Math.pow(1 + i, n);
-}
-
-/** PV de anualidad-vencida: PMT · (1 − v^n) / i */
-function annuityImmediate(pmt: number, i: number, n: number): number {
-  if (i === 0) return pmt * n;
-  return pmt * (1 - Math.pow(1 + i, -n)) / i;
-}
-
-/** PV de anualidad-anticipada: (1+i) · a⌐n|i */
-function annuityDue(pmt: number, i: number, n: number): number {
-  return annuityImmediate(pmt, i, n) * (1 + i);
-}
-
-/** PV de anualidad diferida: v^d · a⌐n|i */
-function annuityDeferred(pmt: number, i: number, n: number, d: number): number {
-  return annuityImmediate(pmt, i, n) * Math.pow(1 + i, -d);
-}
-
-/**
- * amortizationSchedule — Tabla período a período con soporte para abonos extraordinarios.
- *
- * Esquemas:
- *   "french"   → cuota constante PMT = PV·i / (1−(1+i)^−n)
- *   "german"   → capital constante K = PV/n
- *   "american" → solo interés hasta vencimiento (bullet)
- *
- * extraMap: { período: monto_abono } — se aplica directo al capital
- */
-function amortizationSchedule(
-  pv: number,
-  i: number,
-  n: number,
-  type = "french",
-  extraMap: ExtraMap = {}
-): AmortRow[] {
-  const rows: AmortRow[] = [];
-
-  if (type === "french") {
-    let pmt       = (pv * i) / (1 - Math.pow(1 + i, -n));
-    let balance   = pv;
-    let remaining = n;
-    let t         = 1;
-
-    while (balance > 0.005 && t <= n + Object.keys(extraMap).length + 1) {
-      const interest  = balance * i;
-      const principal = Math.min(pmt - interest, balance);
-      const extra     = Math.min(extraMap[t] ?? 0, Math.max(0, balance - principal));
-
-      balance = Math.max(0, balance - principal - extra);
-
-      rows.push({ t, pmt: principal + interest, interest, principal, extra, totalPaid: principal + interest + extra, balance, isCancelled: balance === 0 });
-
-      remaining--;
-      if (extra > 0 && balance > 0 && remaining > 0) {
-        pmt = (balance * i) / (1 - Math.pow(1 + i, -remaining));
-      }
-      if (balance === 0) break;
-      t++;
-    }
-
-  } else if (type === "german") {
-    const basePrincipal = pv / n;
-    let balance = pv;
-
-    for (let t = 1; t <= n && balance > 0.005; t++) {
-      const interest  = balance * i;
-      const principal = Math.min(basePrincipal, balance);
-      const extra     = Math.min(extraMap[t] ?? 0, Math.max(0, balance - principal));
-      balance = Math.max(0, balance - principal - extra);
-      rows.push({ t, pmt: principal + interest, interest, principal, extra, totalPaid: principal + interest + extra, balance, isCancelled: balance === 0 });
-      if (balance === 0) break;
-    }
-
-  } else {
-    // Americano (bullet)
-    let balance = pv;
-    for (let t = 1; t <= n && balance > 0.005; t++) {
-      const interest  = balance * i;
-      const principal = t === n ? balance : 0;
-      const extra     = t < n ? Math.min(extraMap[t] ?? 0, balance) : 0;
-      balance = Math.max(0, balance - principal - extra);
-      rows.push({ t, pmt: principal + interest, interest, principal, extra, totalPaid: principal + interest + extra, balance, isCancelled: balance === 0 });
-      if (balance === 0) break;
-    }
-  }
-
-  return rows;
-}
-
 // =============================================================================
-// SECCIÓN 4: COMPONENTES
+// SECCIÓN 5: COMPONENTES
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// 4.1 TVMPanel — Valor del Dinero en el Tiempo
+// 5.1 TVMPanel — llama a POST /tvm
 // -----------------------------------------------------------------------------
 function TVMPanel() {
   const [mode, setMode] = useState("fv");
   const [pv,   setPv]   = useState(1000);
   const [fv,   setFv]   = useState(0);
-  const [i,    setI]    = useState(5);
+  const [rate, setRate] = useState(5);
   const [n,    setN]    = useState(10);
   const [conv, setConv] = useState("nominal");
   const [m,    setM]    = useState(12);
-  const [result, setResult] = useState<TVMResult | null>(null);
 
-  const calculate = () => {
-    const i_eff = effectiveRate(i / 100, m, conv);
-    let res: TVMResult;
-    if (mode === "fv") {
-      res = { value: calcFV(pv, i_eff, n), label: "Future Value", detail: `PV $${fmt(pv)} crece durante ${n} períodos`, i_eff, i_nom: i / 100, delta: Math.log(1 + i_eff) };
-    } else {
-      res = { value: calcPV(fv, i_eff, n), label: "Present Value", detail: `FV $${fmt(fv)} descontado ${n} períodos`, i_eff, i_nom: i / 100, delta: Math.log(1 + i_eff) };
+  // Estado de la llamada al backend
+  const [result,  setResult]  = useState<TVMResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const calculate = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Enviamos la tasa en decimal al backend (5% → 0.05)
+      const res = await api.tvm({
+        mode,
+        pv: mode === "fv" ? pv : undefined,
+        fv: mode === "pv" ? fv : undefined,
+        rate: rate / 100,
+        n,
+        conv: conv === "Nominal i^(m)" ? "nominal"
+            : conv === "Efectiva anual i" ? "effective" : "continuous",
+        m,
+      });
+      setResult(res);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error al conectar con el backend");
+    } finally {
+      setLoading(false);
     }
-    setResult(res);
   };
 
   return (
     <div>
-      <div className="formula">{mode === "fv" ? "FV = PV · (1 + i)ⁿ" : "PV = FV · (1 + i)⁻ⁿ = FV · vⁿ"}</div>
+      <div className="formula">
+        {mode === "fv" ? "FV = PV · (1 + i)ⁿ" : "PV = FV · (1 + i)⁻ⁿ = FV · vⁿ"}
+      </div>
       <div className="grid-2">
         <div className="card">
           <div className="card-title">Parámetros</div>
           <div className="field">
             <label>Calcular</label>
-            <select value={mode} onChange={e => setMode(e.target.value)}>
+            <select value={mode} onChange={e => { setMode(e.target.value); setResult(null); }}>
               <option value="fv">Future Value (dado PV)</option>
               <option value="pv">Present Value (dado FV)</option>
             </select>
@@ -314,16 +304,16 @@ function TVMPanel() {
             ? <div className="field"><label>Present Value ($)</label><input type="number" value={pv} onChange={e => setPv(parseFloat(e.target.value))} /></div>
             : <div className="field"><label>Future Value ($)</label><input type="number" value={fv} onChange={e => setFv(parseFloat(e.target.value))} /></div>
           }
-          <div className="field"><label>Tasa (%)</label><input type="number" step="0.01" value={i} onChange={e => setI(parseFloat(e.target.value))} /></div>
+          <div className="field"><label>Tasa (%)</label><input type="number" step="0.01" value={rate} onChange={e => setRate(parseFloat(e.target.value))} /></div>
           <div className="field">
-            <label>Convención de tasa</label>
+            <label>Convención</label>
             <select value={conv} onChange={e => setConv(e.target.value)}>
-              <option value="nominal">Nominal i^(m)</option>
-              <option value="effective">Efectiva anual i</option>
-              <option value="continuous">Fuerza de interés δ</option>
+              <option>Nominal i^(m)</option>
+              <option>Efectiva anual i</option>
+              <option>Fuerza de interés δ</option>
             </select>
           </div>
-          {conv === "nominal" && (
+          {conv === "Nominal i^(m)" && (
             <div className="field">
               <label>Capitalización (m)</label>
               <select value={m} onChange={e => setM(parseInt(e.target.value))}>
@@ -334,14 +324,18 @@ function TVMPanel() {
             </div>
           )}
           <div className="field"><label>Períodos (n)</label><input type="number" value={n} onChange={e => setN(parseFloat(e.target.value))} /></div>
-          <button className="btn" onClick={calculate}>Calcular</button>
+          <button className={`btn ${loading ? "loading" : ""}`} onClick={calculate} disabled={loading}>
+            {loading ? "Calculando..." : "▸ Calcular"}
+          </button>
+          {error && <div className="error-box">⚠ {error}</div>}
         </div>
+
         <div>
           {result ? (
             <div className="result-box">
               <div className="result-label">{result.label}</div>
               <div className="result-value">${fmt(result.value)}</div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)" }}>{result.detail}</div>
+              <div style={{ fontSize:11, color:"rgba(255,255,255,0.45)" }}>{result.detail}</div>
               <hr className="result-divider" />
               <div className="result-detail">
                 <span className="result-hl">i efectiva anual</span> = {fmtPct(result.i_eff)}<br />
@@ -350,7 +344,10 @@ function TVMPanel() {
               </div>
             </div>
           ) : (
-            <div className="empty-state"><div className="empty-icon">◎</div>Ingresa parámetros y presiona Calcular</div>
+            <div className="empty-state">
+              <div className="empty-icon">◎</div>
+              Ingresa parámetros y presiona Calcular
+            </div>
           )}
         </div>
       </div>
@@ -359,41 +356,37 @@ function TVMPanel() {
 }
 
 // -----------------------------------------------------------------------------
-// 4.2 AnnuityPanel — Anualidades
+// 5.2 AnnuityPanel — llama a POST /annuity
 // -----------------------------------------------------------------------------
 function AnnuityPanel() {
-  const [type,   setType]   = useState("immediate");
-  const [pmt,    setPmt]    = useState(100);
-  const [i,      setI]      = useState(5);
-  const [n,      setN]      = useState(20);
-  const [d,      setD]      = useState(5);
-  const [result, setResult] = useState<AnnuityResult | null>(null);
+  const [type,    setType]    = useState("immediate");
+  const [pmt,     setPmt]     = useState(100);
+  const [i,       setI]       = useState(5);
+  const [n,       setN]       = useState(20);
+  const [d,       setD]       = useState(5);
+  const [result,  setResult]  = useState<AnnuityResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
 
-  const calculate = () => {
-    const rate = i / 100;
-    let pv: number, label: string, formula: string;
-    if (type === "immediate") {
-      pv = annuityImmediate(pmt, rate, n);
-      label = "Anualidad Vencida — a⌐n|i";
-      formula = "PV = PMT · (1 − vⁿ) / i";
-    } else if (type === "due") {
-      pv = annuityDue(pmt, rate, n);
-      label = "Anualidad Anticipada — ä⌐n|i";
-      formula = "PV = PMT · (1+i) · a⌐n|i";
-    } else {
-      pv = annuityDeferred(pmt, rate, n, d);
-      label = `Anualidad Diferida ${d} períodos`;
-      formula = `PV = v^${d} · PMT · a⌐${n}|i`;
+  const calculate = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.annuity({ type, pmt, i: i / 100, n, d });
+      setResult(res);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error al conectar con el backend");
+    } finally {
+      setLoading(false);
     }
-    const fv = calcFV(pv, rate, type === "deferred" ? n + d : n);
-    setResult({ pv, fv, label, formula, totalPmts: pmt * n, totalInterest: fv - pmt * n });
   };
 
   return (
     <div>
       <div className="tabs">
         {[["immediate","Vencida"],["due","Anticipada"],["deferred","Diferida"]].map(([k,v]) => (
-          <div key={k} className={`tab ${type === k ? "active" : ""}`} onClick={() => { setType(k); setResult(null); }}>{v}</div>
+          <div key={k} className={`tab ${type === k ? "active" : ""}`}
+            onClick={() => { setType(k); setResult(null); setError(null); }}>{v}</div>
         ))}
       </div>
       {result && <div className="formula">{result.formula}</div>}
@@ -404,7 +397,10 @@ function AnnuityPanel() {
           <div className="field"><label>Tasa efectiva anual (%)</label><input type="number" step="0.01" value={i} onChange={e => setI(parseFloat(e.target.value))} /></div>
           <div className="field"><label>Pagos n</label><input type="number" value={n} onChange={e => setN(parseFloat(e.target.value))} /></div>
           {type === "deferred" && <div className="field"><label>Diferimiento d</label><input type="number" value={d} onChange={e => setD(parseFloat(e.target.value))} /></div>}
-          <button className="btn" onClick={calculate}>Calcular</button>
+          <button className={`btn ${loading ? "loading" : ""}`} onClick={calculate} disabled={loading}>
+            {loading ? "Calculando..." : "▸ Calcular"}
+          </button>
+          {error && <div className="error-box">⚠ {error}</div>}
         </div>
         <div>
           {result ? (
@@ -414,8 +410,8 @@ function AnnuityPanel() {
               <hr className="result-divider" />
               <div className="result-detail">
                 <span className="result-hl">Valor acumulado</span> = ${fmt(result.fv)}<br />
-                <span className="result-hl">Suma pagos</span> = ${fmt(result.totalPmts)}<br />
-                <span className="result-hl">Interés total</span> = ${fmt(result.totalInterest)}
+                <span className="result-hl">Suma pagos</span> = ${fmt(result.total_pmts)}<br />
+                <span className="result-hl">Interés total</span> = ${fmt(result.total_interest)}
               </div>
             </div>
           ) : (
@@ -428,78 +424,84 @@ function AnnuityPanel() {
 }
 
 // -----------------------------------------------------------------------------
-// 4.3 AmortPanel — Amortización con abonos extraordinarios
+// 5.3 AmortPanel — llama a POST /amortization
 // -----------------------------------------------------------------------------
 function AmortPanel() {
-  const [pvInput,   setPvInput]   = useState(10000);
-  const [iInput,    setIInput]    = useState(6);
-  const [nInput,    setNInput]    = useState(12);
-  const [type,      setType]      = useState("french");
-  const [baseRows,  setBaseRows]  = useState<AmortRow[]>([]);
-  const [baseSummary, setBaseSummary] = useState<AmortSummary | null>(null);
-  const [extraMap,  setExtraMap]  = useState<ExtraMap>({});
-  const [extraRows, setExtraRows] = useState<AmortRow[]>([]);
-  const [extraSummary, setExtraSummary] = useState<AmortSummary | null>(null);
-  const [pendingT,  setPendingT]  = useState("");
-  const [pendingAmt,setPendingAmt]= useState("");
-  const [addedMsg,  setAddedMsg]  = useState("");
+  const [pvInput,      setPvInput]      = useState(10000);
+  const [iInput,       setIInput]       = useState(6);
+  const [nInput,       setNInput]       = useState(12);
+  const [type,         setType]         = useState("french");
+  const [extraMap,     setExtraMap]     = useState<ExtraMap>({});
+  const [pendingT,     setPendingT]     = useState("");
+  const [pendingAmt,   setPendingAmt]   = useState("");
+  const [addedMsg,     setAddedMsg]     = useState("");
+  const [baseResult,   setBaseResult]   = useState<AmortResult | null>(null);
+  const [extraResult,  setExtraResult]  = useState<AmortResult | null>(null);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
 
-  const calculate = () => {
-    const i  = iInput / 100;
-    const schedule = amortizationSchedule(pvInput, i, nInput, type, {});
-    setBaseRows(schedule);
-    setBaseSummary({
-      totalInterest: schedule.reduce((s, r) => s + r.interest, 0),
-      totalPmt:      schedule.reduce((s, r) => s + r.pmt, 0),
-      pv: pvInput, periods: schedule.length,
-    });
-    setExtraMap({}); setExtraRows([]); setExtraSummary(null);
-    setPendingT(""); setPendingAmt(""); setAddedMsg("");
+  // Llama al backend con el mapa de abonos actual
+  const fetchAmort = async (map: ExtraMap, isBase = false) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.amortization({
+        pv: pvInput, i: iInput / 100, n: nInput, scheme: type,
+        // Convertir claves numéricas a string para JSON
+        extra_map: Object.fromEntries(Object.entries(map).map(([k,v]) => [String(k), v])),
+      });
+      if (isBase) {
+        setBaseResult(res);
+        setExtraResult(null);
+        setExtraMap({});
+      } else {
+        setExtraResult(res);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error al conectar con el backend");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const recalcWithExtras = (newMap: ExtraMap) => {
-    const i = iInput / 100;
-    const schedule = amortizationSchedule(pvInput, i, nInput, type, newMap);
-    setExtraRows(schedule);
-    const totalInterest = schedule.reduce((s, r) => s + r.interest, 0);
-    setExtraSummary({
-      totalInterest,
-      totalPmt: schedule.reduce((s, r) => s + r.pmt + r.extra, 0),
-      pv: pvInput, periods: schedule.length,
-      interestSaved: (baseSummary?.totalInterest ?? 0) - totalInterest,
-      periodsSaved:  (baseSummary?.periods ?? 0) - schedule.length,
-    });
-  };
-
-  const addExtra = () => {
+  const addExtra = async () => {
     const t      = parseInt(pendingT);
     const amount = parseFloat(pendingAmt);
     if (isNaN(t) || isNaN(amount) || amount <= 0 || t < 1 || t > nInput) return;
-    const newMap: ExtraMap = { ...extraMap, [t]: (extraMap[t] ?? 0) + amount };
+    const newMap = { ...extraMap, [t]: (extraMap[t] ?? 0) + amount };
     setExtraMap(newMap);
-    recalcWithExtras(newMap);
     setAddedMsg(`✓ Abono de $${fmt(amount)} en período ${t}`);
     setPendingT(""); setPendingAmt("");
     setTimeout(() => setAddedMsg(""), 3000);
+    await fetchAmort(newMap);
   };
 
-  const removeExtra = (t: number) => {
-    const newMap: ExtraMap = { ...extraMap };
+  const removeExtra = async (t: number) => {
+    const newMap = { ...extraMap };
     delete newMap[t];
     setExtraMap(newMap);
-    if (Object.keys(newMap).length === 0) { setExtraRows([]); setExtraSummary(null); return; }
-    recalcWithExtras(newMap);
+    if (Object.keys(newMap).length === 0) { setExtraResult(null); return; }
+    await fetchAmort(newMap);
   };
 
-  const displayRows = extraRows.length > 0 ? extraRows : baseRows;
-  const hasExtras   = Object.keys(extraMap).length > 0;
-  const totalExtrasPaid = Object.values(extraMap).reduce((s: number, v: number) => s + v, 0);
+  const displayRows  = extraResult?.rows ?? baseResult?.rows ?? [];
+  const hasExtras    = Object.keys(extraMap).length > 0;
+  const totalExtras  = Object.values(extraMap).reduce((s, v) => s + v, 0);
+  const baseSummary: AmortSummary | null = baseResult
+    ? { total_interest: baseResult.total_interest, total_pmt: baseResult.total_pmt,
+        pv: pvInput, periods: baseResult.periods }
+    : null;
+  const extraSummary: AmortSummary | null = extraResult && baseSummary
+    ? { ...extraResult, pv: pvInput,
+        interest_saved: baseSummary.total_interest - extraResult.total_interest,
+        periods_saved:  baseSummary.periods - extraResult.periods }
+    : null;
 
   return (
     <div>
       <div className="formula">Francés: PMT = PV·i/(1−(1+i)⁻ⁿ) | Alemán: K=PV/n | Abono extra → capital directo</div>
 
-      <div className="grid-2" style={{ marginBottom: 24 }}>
+      <div className="grid-2" style={{ marginBottom:24 }}>
         <div className="card">
           <div className="card-title">Parámetros del Préstamo</div>
           <div className="field"><label>Monto ($)</label><input type="number" value={pvInput} onChange={e => setPvInput(parseFloat(e.target.value))} /></div>
@@ -513,19 +515,25 @@ function AmortPanel() {
               <option value="american">Americano — bullet</option>
             </select>
           </div>
-          <button className="btn" onClick={calculate}>Generar Tabla</button>
+          <button className={`btn ${loading ? "loading" : ""}`}
+            onClick={() => fetchAmort({}, true)} disabled={loading}>
+            {loading ? "Calculando..." : "▸ Generar Tabla"}
+          </button>
+          {error && <div className="error-box">⚠ {error}</div>}
         </div>
 
         {baseSummary && (
           <div className="card">
-            <div className="card-title">{hasExtras ? "Comparativo: Base vs Con Abonos" : "Resumen"}</div>
+            <div className="card-title">{hasExtras ? "Comparativo Base vs Con Abonos" : "Resumen"}</div>
             <div className="info-row"><span className="info-key">Capital</span><span>${fmt(baseSummary.pv)}</span></div>
             <div className="info-row">
               <span className="info-key">Períodos</span>
               <span>
                 {hasExtras && extraSummary ? (
                   <><span style={{ textDecoration:"line-through", color:"var(--gray-light)", marginRight:8 }}>{baseSummary.periods}</span>
-                  <span style={{ color:"#1a5c3a", fontWeight:600 }}>{extraSummary.periods}{(extraSummary.periodsSaved ?? 0) > 0 && <span style={{ fontSize:10, marginLeft:6 }}>(−{extraSummary.periodsSaved})</span>}</span></>
+                  <span style={{ color:"#1a5c3a", fontWeight:600 }}>{extraSummary.periods}
+                    {(extraSummary.periods_saved ?? 0) > 0 && <span style={{ fontSize:10, marginLeft:6 }}>(−{extraSummary.periods_saved})</span>}
+                  </span></>
                 ) : baseSummary.periods}
               </span>
             </div>
@@ -533,37 +541,42 @@ function AmortPanel() {
               <span className="info-key">Interés total</span>
               <span>
                 {hasExtras && extraSummary ? (
-                  <><span style={{ textDecoration:"line-through", color:"var(--gray-light)", marginRight:8 }}>${fmt(baseSummary.totalInterest)}</span>
-                  <span className="td-navy">${fmt(extraSummary.totalInterest)}</span></>
-                ) : <span className="td-navy">${fmt(baseSummary.totalInterest)}</span>}
+                  <><span style={{ textDecoration:"line-through", color:"var(--gray-light)", marginRight:8 }}>${fmt(baseSummary.total_interest)}</span>
+                  <span className="td-navy">${fmt(extraSummary.total_interest)}</span></>
+                ) : <span className="td-navy">${fmt(baseSummary.total_interest)}</span>}
               </span>
             </div>
-            {hasExtras && extraSummary && (extraSummary.interestSaved ?? 0) > 0 && (
+            {hasExtras && extraSummary && (extraSummary.interest_saved ?? 0) > 0 && (
               <div className="info-row" style={{ background:"#f0fff4", margin:"0 -28px", padding:"10px 28px" }}>
                 <span className="info-key" style={{ color:"#1a5c3a" }}>💰 Interés ahorrado</span>
-                <span style={{ color:"#1a5c3a", fontWeight:600 }}>${fmt(extraSummary.interestSaved ?? 0)}</span>
+                <span style={{ color:"#1a5c3a", fontWeight:600 }}>${fmt(extraSummary.interest_saved ?? 0)}</span>
               </div>
             )}
             {hasExtras && (
-              <div className="info-row"><span className="info-key">Total abonos extra</span><span style={{ color:"var(--gold)", fontWeight:600 }}>${fmt(totalExtrasPaid)}</span></div>
+              <div className="info-row"><span className="info-key">Total abonos extra</span>
+              <span style={{ color:"var(--gold)", fontWeight:600 }}>${fmt(totalExtras)}</span></div>
             )}
           </div>
         )}
       </div>
 
-      {baseRows.length > 0 && (
-        <div className="card" style={{ marginBottom: 24 }}>
+      {baseResult && (
+        <div className="card" style={{ marginBottom:24 }}>
           <div className="card-title">Abonos Extraordinarios</div>
           <div style={{ display:"flex", gap:12, alignItems:"flex-end", marginBottom:16 }}>
             <div className="field" style={{ flex:1, marginBottom:0 }}>
               <label>Período</label>
-              <input type="number" min="1" max={nInput} placeholder={`1–${nInput}`} value={pendingT} onChange={e => setPendingT(e.target.value)} />
+              <input type="number" min="1" max={nInput} placeholder={`1–${nInput}`}
+                value={pendingT} onChange={e => setPendingT(e.target.value)} />
             </div>
             <div className="field" style={{ flex:2, marginBottom:0 }}>
               <label>Monto ($)</label>
-              <input type="number" min="1" placeholder="ej: 500" value={pendingAmt} onChange={e => setPendingAmt(e.target.value)} />
+              <input type="number" min="1" placeholder="ej: 500"
+                value={pendingAmt} onChange={e => setPendingAmt(e.target.value)} />
             </div>
-            <button className="btn" style={{ width:"auto", padding:"10px 20px", marginTop:0 }} onClick={addExtra}>+ Agregar</button>
+            <button className={`btn ${loading ? "loading" : ""}`}
+              style={{ width:"auto", padding:"10px 20px", marginTop:0 }}
+              onClick={addExtra} disabled={loading}>+ Agregar</button>
           </div>
           {addedMsg && <div style={{ fontSize:11, color:"#1a5c3a", background:"#f0fff4", border:"1px solid #c3e6cb", padding:"8px 12px", marginBottom:12 }}>{addedMsg}</div>}
           {hasExtras ? (
@@ -571,8 +584,8 @@ function AmortPanel() {
               {Object.entries(extraMap).sort(([a],[b]) => Number(a)-Number(b)).map(([t, amount]) => (
                 <div key={t} style={{ display:"flex", alignItems:"center", gap:8, background:"var(--off-white)", border:"1px solid var(--rule)", borderLeft:"3px solid var(--gold)", padding:"6px 12px", fontSize:11 }}>
                   <span style={{ color:"var(--gray-mid)" }}>Período {t}</span>
-                  <span style={{ color:"var(--gold)", fontWeight:600 }}>${fmt(amount as number)}</span>
-                  <span onClick={() => removeExtra(Number(t))} style={{ cursor:"pointer", color:"var(--gray-light)", fontSize:13 }} title="Eliminar">×</span>
+                  <span style={{ color:"var(--gold)", fontWeight:600 }}>${fmt(amount)}</span>
+                  <span onClick={() => removeExtra(Number(t))} style={{ cursor:"pointer", color:"var(--gray-light)", fontSize:13 }}>×</span>
                 </div>
               ))}
             </div>
@@ -600,10 +613,10 @@ function AmortPanel() {
               </thead>
               <tbody>
                 {displayRows.map(r => (
-                  <tr key={r.t} style={{ background: r.extra > 0 ? "rgba(184,150,12,0.06)" : r.isCancelled && r.t < nInput ? "rgba(26,92,58,0.07)" : undefined }}>
+                  <tr key={r.t} style={{ background: r.extra > 0 ? "rgba(184,150,12,0.06)" : r.is_cancelled && r.t < nInput ? "rgba(26,92,58,0.07)" : undefined }}>
                     <td>
                       {r.t}
-                      {r.isCancelled && r.t < nInput && (
+                      {r.is_cancelled && r.t < nInput && (
                         <span style={{ marginLeft:6, fontSize:8, background:"#1a5c3a", color:"white", padding:"1px 5px" }}>CANCELADO</span>
                       )}
                     </td>
@@ -624,23 +637,28 @@ function AmortPanel() {
 }
 
 // -----------------------------------------------------------------------------
-// 4.4 RateConvPanel — Conversión de Tasas
+// 5.4 RateConvPanel — llama a POST /rates
 // -----------------------------------------------------------------------------
 function RateConvPanel() {
-  const [r, setR] = useState(6);
-  const [m, setM] = useState(12);
+  const [rate,    setRate]    = useState(6);
+  const [m,       setM]       = useState(12);
+  const [result,  setResult]  = useState<RatesResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
 
-  const i_eff = effectiveRate(r / 100, m, "nominal");
-  const delta  = Math.log(1 + i_eff);
-
-  const equivalentRates = [
-    { label: "Efectiva anual (m=1)",     val: Math.pow(1 + i_eff, 1)   - 1 },
-    { label: "Nominal semestral (m=2)",  val: 2   * (Math.pow(1 + i_eff, 1/2)   - 1) },
-    { label: "Nominal trimestral (m=4)", val: 4   * (Math.pow(1 + i_eff, 1/4)   - 1) },
-    { label: "Nominal mensual (m=12)",   val: 12  * (Math.pow(1 + i_eff, 1/12)  - 1) },
-    { label: "Nominal diaria (m=365)",   val: 365 * (Math.pow(1 + i_eff, 1/365) - 1) },
-    { label: "Fuerza de interés δ",      val: delta },
-  ];
+  // Conversión en tiempo real al cambiar cualquier input
+  const calculate = async (r = rate, mVal = m) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.rates({ rate: r / 100, m: mVal, conv: "nominal" });
+      setResult(res);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error al conectar con el backend");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div>
@@ -648,31 +666,45 @@ function RateConvPanel() {
       <div className="grid-2">
         <div className="card">
           <div className="card-title">Tasa de Entrada</div>
-          <div className="field"><label>Nominal i^(m) (%)</label><input type="number" step="0.01" value={r} onChange={e => setR(parseFloat(e.target.value))} /></div>
+          <div className="field">
+            <label>Nominal i^(m) (%)</label>
+            <input type="number" step="0.01" value={rate}
+              onChange={e => { setRate(parseFloat(e.target.value)); calculate(parseFloat(e.target.value), m); }} />
+          </div>
           <div className="field">
             <label>Capitalización m</label>
-            <select value={m} onChange={e => setM(parseInt(e.target.value))}>
+            <select value={m} onChange={e => { setM(parseInt(e.target.value)); calculate(rate, parseInt(e.target.value)); }}>
               <option value="1">Anual</option><option value="2">Semestral</option>
               <option value="4">Trimestral</option><option value="12">Mensual</option>
               <option value="365">Diaria</option>
             </select>
           </div>
-          <div className="result-box" style={{ marginTop:20 }}>
-            <div className="result-label">Tasa Efectiva Anual</div>
-            <div className="result-value">{fmtPct(i_eff)}</div>
-            <div className="result-detail">δ = <span className="result-hl">{fmtPct(delta)}</span></div>
-          </div>
+          <button className={`btn ${loading ? "loading" : ""}`} onClick={() => calculate()} disabled={loading}>
+            {loading ? "Calculando..." : "▸ Calcular Equivalencias"}
+          </button>
+          {error && <div className="error-box">⚠ {error}</div>}
+          {result && (
+            <div className="result-box" style={{ marginTop:20 }}>
+              <div className="result-label">Tasa Efectiva Anual</div>
+              <div className="result-value">{fmtPct(result.i_eff)}</div>
+              <div className="result-detail">δ = <span className="result-hl">{fmtPct(result.delta)}</span></div>
+            </div>
+          )}
         </div>
         <div className="card">
           <div className="card-title">Tasas equivalentes — misma acumulación anual</div>
-          <table className="table">
-            <thead><tr><th>Convención</th><th className="td-right">Tasa</th></tr></thead>
-            <tbody>
-              {equivalentRates.map(row => (
-                <tr key={row.label}><td>{row.label}</td><td className="td-right td-green">{fmtPct(row.val)}</td></tr>
-              ))}
-            </tbody>
-          </table>
+          {result ? (
+            <table className="table">
+              <thead><tr><th>Convención</th><th className="td-right">Tasa</th></tr></thead>
+              <tbody>
+                {result.equivalents.map(r => (
+                  <tr key={r.label}><td>{r.label}</td><td className="td-right td-green">{fmtPct(r.value)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty-state"><div className="empty-icon">◎</div>Presiona Calcular para ver equivalencias</div>
+          )}
         </div>
       </div>
     </div>
@@ -680,7 +712,7 @@ function RateConvPanel() {
 }
 
 // =============================================================================
-// SECCIÓN 5: NAVEGACIÓN Y APP RAÍZ
+// SECCIÓN 6: NAVEGACIÓN Y APP RAÍZ
 // =============================================================================
 
 type PanelId = "tvm" | "annuity" | "amort" | "rates";
@@ -692,13 +724,13 @@ const NAV_ITEMS: { id: PanelId; label: string }[] = [
   { id: "rates",   label: "Conversión de Tasas"           },
 ];
 
-const COMING_SOON = ["Bond Pricer","Yield Curve","Duration & Convexity","Immunización de Pasivos"];
+const COMING_SOON = ["Bond Pricer","Yield Curve","Duration & Convexity","Immunización"];
 
-const PAGE_META: Record<PanelId, { eyebrow: string; title: string; desc: string; fm: string }> = {
-  tvm:     { eyebrow:"Sección 1 & 2 — FM", title:"Valor del Dinero\nen el Tiempo",    desc:"PV y FV para capital único bajo cualquier convención de tasa.", fm:"FM Sections 1–2: Interest Measurement" },
-  annuity: { eyebrow:"Sección 2 — FM",     title:"Valuación de\nAnualidades",          desc:"Anualidades vencidas, anticipadas y diferidas con notación FM.", fm:"FM Section 2: Annuities" },
-  amort:   { eyebrow:"Sección 2 — FM",     title:"Tablas de\nAmortización",            desc:"Tabla período a período con soporte para abonos extraordinarios.", fm:"FM Section 2: Loan Repayment" },
-  rates:   { eyebrow:"Sección 1 — FM",     title:"Conversión de\nTasas de Interés",   desc:"Equivalencias entre tasas nominales, efectivas y fuerza de interés.", fm:"FM Section 1: Interest Rate Measurement" },
+const PAGE_META: Record<PanelId, { eyebrow:string; title:string; desc:string; fm:string }> = {
+  tvm:     { eyebrow:"Sección 1 & 2 — FM", title:"Valor del Dinero\nen el Tiempo",   desc:"PV y FV bajo cualquier convención de tasa. Calculado por el backend Python.", fm:"FM Sections 1–2: Interest Measurement" },
+  annuity: { eyebrow:"Sección 2 — FM",     title:"Valuación de\nAnualidades",         desc:"Vencidas, anticipadas y diferidas. Motor de cálculo en Python / FastAPI.",      fm:"FM Section 2: Annuities" },
+  amort:   { eyebrow:"Sección 2 — FM",     title:"Tablas de\nAmortización",           desc:"Tabla período a período con abonos extraordinarios. Cálculo en Python.",        fm:"FM Section 2: Loan Repayment" },
+  rates:   { eyebrow:"Sección 1 — FM",     title:"Conversión de\nTasas de Interés",  desc:"Equivalencias entre tasas. Respuesta en tiempo real desde el backend.",         fm:"FM Section 1: Interest Rate Measurement" },
 };
 
 const PANELS: Record<PanelId, React.ReactElement> = {
@@ -719,13 +751,19 @@ export default function App() {
       <header className="header">
         <span className="header-logo">Fixed Income Risk Analyzer</span>
         <span className="header-module">Módulo 1 — Time Value Engine</span>
+        {/* Indicador visual de que el backend está activo */}
+        <span className="api-indicator">
+          <span className="api-dot"></span>
+          Python API
+        </span>
         <span className="header-badge">SOA · FM Exam Prep</span>
       </header>
       <div className="layout">
         <aside className="sidebar">
           <div className="sidebar-label">Módulo 1 — Activo</div>
           {NAV_ITEMS.map(item => (
-            <div key={item.id} className={`nav-item ${active === item.id ? "active" : ""}`} onClick={() => setActive(item.id)}>
+            <div key={item.id} className={`nav-item ${active === item.id ? "active" : ""}`}
+              onClick={() => setActive(item.id)}>
               <div className="nav-bullet" />{item.label}
             </div>
           ))}
