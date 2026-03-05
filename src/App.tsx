@@ -25,7 +25,7 @@ import { useState } from "react";
 // Mientras desarrollas localmente: "http://localhost:8000"
 // En producción (Railway): "https://TU-APP.up.railway.app"
 // =============================================================================
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE_URL = (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_URL || "http://localhost:8000";
 
 // =============================================================================
 // SECCIÓN 1: TIPOS TypeScript
