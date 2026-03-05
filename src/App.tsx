@@ -429,7 +429,8 @@ function AnnuityPanel() {
 function AmortPanel() {
   const [pvInput,      setPvInput]      = useState(10000);
   const [iInput,       setIInput]       = useState(6);
-  const [nInput,       setNInput]       = useState(12);
+  const [nInput,       setNInput]       = useState(24);   // meses por defecto
+  const [freq,         setFreq]         = useState(12);   // mensual por defecto
   const [type,         setType]         = useState("french");
   const [extraMap,     setExtraMap]     = useState<ExtraMap>({});
   const [pendingT,     setPendingT]     = useState("");
@@ -445,9 +446,13 @@ function AmortPanel() {
     setLoading(true);
     setError(null);
     try {
+      // El backend recibe:
+      //   i: tasa efectiva ANUAL en decimal  (ej: 6% → 0.06)
+      //   freq: pagos por año               (ej: 12 = mensual)
+      //   n: número de períodos en la frecuencia elegida
+      // El backend hace la conversión: i_periodo = (1+i)^(1/freq) - 1
       const res = await api.amortization({
-        pv: pvInput, i: iInput / 100, n: nInput, scheme: type,
-        // Convertir claves numéricas a string para JSON
+        pv: pvInput, i: iInput / 100, n: nInput, freq, scheme: type,
         extra_map: Object.fromEntries(Object.entries(map).map(([k,v]) => [String(k), v])),
       });
       if (isBase) {
@@ -506,7 +511,23 @@ function AmortPanel() {
           <div className="card-title">Parámetros del Préstamo</div>
           <div className="field"><label>Monto ($)</label><input type="number" value={pvInput} onChange={e => setPvInput(parseFloat(e.target.value))} /></div>
           <div className="field"><label>Tasa efectiva anual (%)</label><input type="number" step="0.01" value={iInput} onChange={e => setIInput(parseFloat(e.target.value))} /></div>
-          <div className="field"><label>Períodos</label><input type="number" value={nInput} onChange={e => setNInput(parseInt(e.target.value))} /></div>
+          <div className="field">
+            <label>Frecuencia de pago</label>
+            <select value={freq} onChange={e => setFreq(parseInt(e.target.value))}>
+              <option value="12">Mensual (12 pagos/año)</option>
+              <option value="4">Trimestral (4 pagos/año)</option>
+              <option value="2">Semestral (2 pagos/año)</option>
+              <option value="1">Anual (1 pago/año)</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>Número de {freq === 12 ? "meses" : freq === 4 ? "trimestres" : freq === 2 ? "semestres" : "años"}</label>
+            <input type="number" value={nInput} onChange={e => setNInput(parseInt(e.target.value))} />
+          </div>
+          <div className="field">
+            <label>Tasa efectiva anual (%)</label>
+            <input type="number" step="0.01" value={iInput} onChange={e => setIInput(parseFloat(e.target.value))} />
+          </div>
           <div className="field">
             <label>Esquema</label>
             <select value={type} onChange={e => setType(e.target.value)}>
