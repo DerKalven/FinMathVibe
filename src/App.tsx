@@ -47,6 +47,8 @@ interface AnnuityResult {
   formula: string;
   total_pmts: number;
   total_interest: number;
+  freq_label: string;   // descripción de frecuencia que devuelve el backend
+  i_periodo: number;    // tasa efectiva por período
 }
 
 interface AmortRow {
@@ -357,11 +359,24 @@ function TVMPanel() {
 
 // -----------------------------------------------------------------------------
 // 5.2 AnnuityPanel — llama a POST /annuity
+// Soporta frecuencias de pago: mensual, bimestral, trimestral, semestral, anual.
+// El backend convierte i_anual → i_periodo antes de calcular.
 // -----------------------------------------------------------------------------
+
+// Mapa de frecuencia → etiqueta para el label dinámico del campo n
+const FREQ_N_LABEL: Record<number, string> = {
+  12: "Número de meses",
+  6:  "Número de bimestres (cada 2 meses)",
+  4:  "Número de trimestres (cada 3 meses)",
+  2:  "Número de semestres (cada 6 meses)",
+  1:  "Número de años",
+};
+
 function AnnuityPanel() {
   const [type,    setType]    = useState("immediate");
   const [pmt,     setPmt]     = useState(100);
   const [i,       setI]       = useState(5);
+  const [freq,    setFreq]    = useState(1);    // anual por defecto
   const [n,       setN]       = useState(20);
   const [d,       setD]       = useState(5);
   const [result,  setResult]  = useState<AnnuityResult | null>(null);
@@ -372,7 +387,8 @@ function AnnuityPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.annuity({ type, pmt, i: i / 100, n, d });
+      // Enviamos freq al backend — él hace la conversión i_anual → i_periodo
+      const res = await api.annuity({ type, pmt, i: i / 100, n, freq, d });
       setResult(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al conectar con el backend");
@@ -393,29 +409,73 @@ function AnnuityPanel() {
       <div className="grid-2">
         <div className="card">
           <div className="card-title">Parámetros</div>
-          <div className="field"><label>Pago PMT ($)</label><input type="number" value={pmt} onChange={e => setPmt(parseFloat(e.target.value))} /></div>
-          <div className="field"><label>Tasa efectiva anual (%)</label><input type="number" step="0.01" value={i} onChange={e => setI(parseFloat(e.target.value))} /></div>
-          <div className="field"><label>Pagos n</label><input type="number" value={n} onChange={e => setN(parseFloat(e.target.value))} /></div>
-          {type === "deferred" && <div className="field"><label>Diferimiento d</label><input type="number" value={d} onChange={e => setD(parseFloat(e.target.value))} /></div>}
+
+          <div className="field"><label>Pago PMT ($)</label>
+            <input type="number" value={pmt} onChange={e => setPmt(parseFloat(e.target.value))} />
+          </div>
+
+          <div className="field"><label>Tasa efectiva anual (%)</label>
+            <input type="number" step="0.01" value={i} onChange={e => setI(parseFloat(e.target.value))} />
+          </div>
+
+          {/* Frecuencia de pago — el backend convierte la tasa automáticamente */}
+          <div className="field">
+            <label>Frecuencia de pago</label>
+            <select value={freq} onChange={e => { setFreq(parseInt(e.target.value)); setResult(null); }}>
+              <option value="12">Mensual (cada mes)</option>
+              <option value="6">Bimestral (cada 2 meses)</option>
+              <option value="4">Trimestral (cada 3 meses)</option>
+              <option value="2">Semestral (cada 6 meses)</option>
+              <option value="1">Anual (cada año)</option>
+            </select>
+          </div>
+
+          {/* Label dinámico según frecuencia */}
+          <div className="field">
+            <label>{FREQ_N_LABEL[freq] ?? "Número de pagos"}</label>
+            <input type="number" value={n} onChange={e => setN(parseFloat(e.target.value))} />
+          </div>
+
+          {type === "deferred" && (
+            <div className="field">
+              <label>Diferimiento d (períodos)</label>
+              <input type="number" value={d} onChange={e => setD(parseFloat(e.target.value))} />
+            </div>
+          )}
+
           <button className={`btn ${loading ? "loading" : ""}`} onClick={calculate} disabled={loading}>
             {loading ? "Calculando..." : "▸ Calcular"}
           </button>
           {error && <div className="error-box">⚠ {error}</div>}
         </div>
+
         <div>
           {result ? (
             <div className="result-box">
-              <div className="result-label">{result.label}</div>
+              {/* Etiqueta explícita: siempre "Valor Presente" */}
+              <div className="result-label">Valor Presente (PV)</div>
               <div className="result-value">${fmt(result.pv)}</div>
+
+              {/* Tipo y frecuencia de la anualidad */}
+              <div style={{ fontSize:10, color:"rgba(255,255,255,0.45)", marginBottom:12,
+                            letterSpacing:"0.1em", textTransform:"uppercase" }}>
+                {result.label}
+              </div>
+
               <hr className="result-divider" />
               <div className="result-detail">
-                <span className="result-hl">Valor acumulado</span> = ${fmt(result.fv)}<br />
-                <span className="result-hl">Suma pagos</span> = ${fmt(result.total_pmts)}<br />
-                <span className="result-hl">Interés total</span> = ${fmt(result.total_interest)}
+                {/* Tasa por período — dato clave para el FM */}
+                <span className="result-hl">Tasa {result.freq_label}</span> = {fmtPct(result.i_periodo)}<br />
+                <span className="result-hl">Valor acumulado (FV)</span> = ${fmt(result.fv)}<br />
+                <span className="result-hl">Suma total de pagos</span> = ${fmt(result.total_pmts)}<br />
+                <span className="result-hl">Interés total generado</span> = ${fmt(result.total_interest)}
               </div>
             </div>
           ) : (
-            <div className="empty-state"><div className="empty-icon">◎</div>Ingresa parámetros y presiona Calcular</div>
+            <div className="empty-state">
+              <div className="empty-icon">◎</div>
+              Ingresa parámetros y presiona Calcular
+            </div>
           )}
         </div>
       </div>
@@ -510,7 +570,6 @@ function AmortPanel() {
         <div className="card">
           <div className="card-title">Parámetros del Préstamo</div>
           <div className="field"><label>Monto ($)</label><input type="number" value={pvInput} onChange={e => setPvInput(parseFloat(e.target.value))} /></div>
-          <div className="field"><label>Tasa efectiva anual (%)</label><input type="number" step="0.01" value={iInput} onChange={e => setIInput(parseFloat(e.target.value))} /></div>
           <div className="field">
             <label>Frecuencia de pago</label>
             <select value={freq} onChange={e => setFreq(parseInt(e.target.value))}>
@@ -524,10 +583,7 @@ function AmortPanel() {
             <label>Número de {freq === 12 ? "meses" : freq === 4 ? "trimestres" : freq === 2 ? "semestres" : "años"}</label>
             <input type="number" value={nInput} onChange={e => setNInput(parseInt(e.target.value))} />
           </div>
-          <div className="field">
-            <label>Tasa efectiva anual (%)</label>
-            <input type="number" step="0.01" value={iInput} onChange={e => setIInput(parseFloat(e.target.value))} />
-          </div>
+          <div className="field"><label>Tasa efectiva anual (%)</label><input type="number" step="0.01" value={iInput} onChange={e => setIInput(parseFloat(e.target.value))} /></div>
           <div className="field">
             <label>Esquema</label>
             <select value={type} onChange={e => setType(e.target.value)}>
