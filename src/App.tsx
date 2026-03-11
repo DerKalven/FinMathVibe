@@ -9,11 +9,10 @@
 //   Cada vez que el usuario presiona "Calcular", React hace un POST al backend
 //   FastAPI (Python) que devuelve el resultado como JSON.
 //
-//   React (Vercel) ──POST /tvm──► FastAPI (Railway) ──JSON──► React (muestra)
+//   React (Vercel) ──POST /annuity──► FastAPI (Railway) ──JSON──► React (muestra)
 //
 // CONFIGURACIÓN:
 //   Cambia API_BASE_URL a la URL de tu backend en Railway.
-//   Ejemplo: "https://finmath-api.up.railway.app"
 // =============================================================================
 
 import { useState } from "react";
@@ -21,11 +20,9 @@ import { useState } from "react";
 // =============================================================================
 // CONFIGURACIÓN DEL BACKEND
 // =============================================================================
-// Esta es la única línea que debes cambiar cuando despliegues el backend.
-// Mientras desarrollas localmente: "http://localhost:8000"
-// En producción (Railway): "https://TU-APP.up.railway.app"
-// =============================================================================
-const API_BASE_URL = (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_URL || "http://localhost:8000";
+const API_BASE_URL =
+  (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_URL ||
+  "http://localhost:8000";
 
 // =============================================================================
 // SECCIÓN 1: TIPOS TypeScript
@@ -40,41 +37,48 @@ interface TVMResult {
   delta: number;
 }
 
+// Full 5-variable annuity result — backend always returns all five variables.
+// "solved" tells the UI which one was computed.
 interface AnnuityResult {
-  pv: number;
-  fv: number;
-  label: string;
-  formula: string;
-  total_pmts: number;
+  solved:         "pv" | "fv" | "pmt" | "i" | "n";
+  pv:             number;
+  fv:             number;
+  pmt:            number;
+  i_annual:       number;   // effective annual rate
+  i_period:       number;   // effective rate per payment period
+  n:              number;
+  delta:          number;   // force of interest
+  label:          string;
+  formula:        string;
+  freq_label:     string;   // "mensual" | "trimestral" | ...
+  total_pmts:     number;
   total_interest: number;
-  freq_label: string;   // descripción de frecuencia que devuelve el backend
-  i_periodo: number;    // tasa efectiva por período
 }
 
 interface AmortRow {
-  t: number;
-  pmt: number;
-  interest: number;
-  principal: number;
-  extra: number;
-  balance: number;
+  t:            number;
+  pmt:          number;
+  interest:     number;
+  principal:    number;
+  extra:        number;
+  balance:      number;
   is_cancelled: boolean;
 }
 
 interface AmortResult {
-  rows: AmortRow[];
+  rows:           AmortRow[];
   total_interest: number;
-  total_pmt: number;
-  periods: number;
+  total_pmt:      number;
+  periods:        number;
 }
 
 interface AmortSummary {
   total_interest: number;
-  total_pmt: number;
-  pv: number;
-  periods: number;
+  total_pmt:      number;
+  pv:             number;
+  periods:        number;
   interest_saved?: number;
-  periods_saved?: number;
+  periods_saved?:  number;
 }
 
 interface RateEquivalent {
@@ -83,8 +87,8 @@ interface RateEquivalent {
 }
 
 interface RatesResult {
-  i_eff: number;
-  delta: number;
+  i_eff:       number;
+  delta:       number;
   equivalents: RateEquivalent[];
 }
 
@@ -93,33 +97,20 @@ type ExtraMap = Record<number, number>;
 // =============================================================================
 // SECCIÓN 2: API CLIENT
 // =============================================================================
-// Funciones que encapsulan cada llamada HTTP al backend.
-// Todos los errores de red se manejan aquí para no contaminar los componentes.
-// =============================================================================
 
-/**
- * apiPost — helper genérico para llamadas POST al backend.
- *
- * Patrón: fetch → JSON.stringify el body → parsear la respuesta.
- * Si el backend devuelve un error HTTP (4xx/5xx), lanza una excepción
- * con el mensaje del backend para mostrárselo al usuario.
- */
 async function apiPost<T>(endpoint: string, body: object): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method: "POST",
+    method:  "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body:    JSON.stringify(body),
   });
-
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `Error ${res.status} en ${endpoint}`);
   }
-
   return res.json() as Promise<T>;
 }
 
-// Funciones específicas — una por endpoint del backend
 const api = {
   tvm:          (body: object) => apiPost<TVMResult>("/tvm", body),
   annuity:      (body: object) => apiPost<AnnuityResult>("/annuity", body),
@@ -128,7 +119,7 @@ const api = {
 };
 
 // =============================================================================
-// SECCIÓN 3: ESTILOS GLOBALES (idénticos a la versión anterior)
+// SECCIÓN 3: ESTILOS GLOBALES
 // =============================================================================
 
 const STYLES = `
@@ -187,11 +178,17 @@ const STYLES = `
   .field input, .field select { width: 100%; background: var(--off-white); border: 1px solid var(--rule); border-bottom: 2px solid var(--navy); padding: 10px 12px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink); outline: none; transition: border-color 0.15s; border-radius: 0; appearance: none; }
   .field input:focus, .field select:focus { border-bottom-color: var(--gold); background: var(--white); }
 
+  /* Solved-for field: gold bottom border to distinguish it */
+  .field-solved input, .field-solved select {
+    border-bottom-color: var(--gold) !important;
+    background: #fffdf0 !important;
+  }
+  .field-solved label { color: var(--gold) !important; }
+
   .btn { width: 100%; background: var(--navy); color: var(--white); border: none; padding: 13px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; cursor: pointer; transition: background 0.15s; margin-top: 8px; }
   .btn:hover { background: var(--blue-mid); }
   .btn:disabled { background: var(--gray-light); cursor: not-allowed; }
 
-  /* Spinner de carga — visible mientras espera la respuesta del backend */
   .btn.loading::after { content: " ◌"; animation: spin 1s linear infinite; display: inline-block; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -201,14 +198,25 @@ const STYLES = `
   .result-divider { border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 14px 0; }
   .result-detail { font-size: 11px; color: rgba(255,255,255,0.5); line-height: 1.9; }
   .result-hl { color: var(--gold); font-weight: 500; }
+  .result-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 11px; }
+  .result-row:last-child { border-bottom: none; }
+  .result-row-key { color: rgba(255,255,255,0.4); font-size: 10px; letter-spacing: 0.06em; }
+  .result-row-val { color: rgba(255,255,255,0.8); font-variant-numeric: tabular-nums; }
+  .result-row-val.gold { color: var(--gold); font-weight: 600; }
 
-  /* Error box — visible cuando el backend devuelve un error */
   .error-box { background: #fff0f0; border: 1px solid #ffcccc; border-left: 3px solid #cc0000; padding: 14px 18px; font-size: 11px; color: #cc0000; margin-top: 16px; }
 
   .tabs { display: flex; border-bottom: 2px solid var(--rule); margin-bottom: 28px; }
   .tab { padding: 10px 24px; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; cursor: pointer; color: var(--gray-light); border-bottom: 3px solid transparent; margin-bottom: -2px; transition: all 0.15s; }
   .tab:hover { color: var(--navy); }
   .tab.active { color: var(--navy); border-bottom-color: var(--navy); font-weight: 500; }
+
+  /* Solve-for tab strip (smaller) */
+  .solve-tabs { display: flex; gap: 0; margin-bottom: 20px; border: 1px solid var(--rule); }
+  .solve-tab { flex: 1; padding: 8px 4px; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; text-align: center; cursor: pointer; color: var(--gray-light); background: var(--off-white); border-right: 1px solid var(--rule); transition: all 0.15s; }
+  .solve-tab:last-child { border-right: none; }
+  .solve-tab:hover { background: #e8ecf4; color: var(--navy); }
+  .solve-tab.active { background: var(--navy); color: var(--white); font-weight: 600; }
 
   .table { width: 100%; border-collapse: collapse; font-size: 11px; }
   .table th { text-align: left; font-size: 8px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gray-light); padding: 8px 12px; border-bottom: 2px solid var(--navy); background: var(--off-white); }
@@ -226,7 +234,6 @@ const STYLES = `
   .empty-state { height: 100%; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--gray-light); font-size: 11px; gap: 10px; border: 1px dashed var(--rule); }
   .empty-icon { font-size: 28px; opacity: 0.3; }
 
-  /* Indicador de backend conectado */
   .api-indicator { display: flex; align-items: center; gap: 6px; font-size: 9px; color: rgba(255,255,255,0.4); margin-left: 20px; }
   .api-dot { width: 6px; height: 6px; border-radius: 50%; background: #21c55d; animation: pulse 2s infinite; }
   .api-dot.error { background: #cc0000; animation: none; }
@@ -234,7 +241,7 @@ const STYLES = `
 `;
 
 // =============================================================================
-// SECCIÓN 4: UTILIDADES DE FORMATO (solo presentación, no matemáticas)
+// SECCIÓN 4: UTILIDADES DE FORMATO
 // =============================================================================
 
 const fmt = (n: number, d = 2): string =>
@@ -248,7 +255,7 @@ const fmtPct = (n: number, d = 4): string =>
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// 5.1 TVMPanel — llama a POST /tvm
+// 5.1 TVMPanel
 // -----------------------------------------------------------------------------
 function TVMPanel() {
   const [mode, setMode] = useState("fv");
@@ -259,20 +266,17 @@ function TVMPanel() {
   const [conv, setConv] = useState("nominal");
   const [m,    setM]    = useState(12);
 
-  // Estado de la llamada al backend
   const [result,  setResult]  = useState<TVMResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
   const calculate = async () => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
-      // Enviamos la tasa en decimal al backend (5% → 0.05)
       const res = await api.tvm({
         mode,
-        pv: mode === "fv" ? pv : undefined,
-        fv: mode === "pv" ? fv : undefined,
+        pv:   mode === "fv" ? pv : undefined,
+        fv:   mode === "pv" ? fv : undefined,
         rate: rate / 100,
         n,
         conv: conv === "Nominal i^(m)" ? "nominal"
@@ -282,9 +286,7 @@ function TVMPanel() {
       setResult(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al conectar con el backend");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   return (
@@ -358,123 +360,399 @@ function TVMPanel() {
 }
 
 // -----------------------------------------------------------------------------
-// 5.2 AnnuityPanel — llama a POST /annuity
-// Soporta frecuencias de pago: mensual, bimestral, trimestral, semestral, anual.
-// El backend convierte i_anual → i_periodo antes de calcular.
+// 5.2 AnnuityPanel — 5-variable solver: PV | FV | PMT | i | n
+//
+// Architecture:
+//   • "Solve for" strip selects which variable the backend should compute.
+//   • When solving for PMT / i / n the user must provide one reference
+//     value (PV or FV), selected via a second dropdown.
+//   • The backend always returns all five variables; we highlight the one
+//     that was actually computed.
+//
+// FM coverage:
+//   Annuity-immediate:  a⌐n|i  and  s⌐n|i
+//   Annuity-due:        ä⌐n|i  and  s̈⌐n|i
+//   Deferred annuity:   d|a⌐n|i
 // -----------------------------------------------------------------------------
 
-// Mapa de frecuencia → etiqueta para el label dinámico del campo n
-const FREQ_N_LABEL: Record<number, string> = {
-  12: "Número de meses",
-  6:  "Número de bimestres (cada 2 meses)",
-  4:  "Número de trimestres (cada 3 meses)",
-  2:  "Número de semestres (cada 6 meses)",
-  1:  "Número de años",
+type SolveFor = "pv" | "fv" | "pmt" | "i" | "n";
+type RefType  = "pv" | "fv";
+type AnnType  = "immediate" | "due" | "deferred";
+
+// Static formula shown before the first calculation
+const STATIC_FORMULA: Record<SolveFor, Record<AnnType, string>> = {
+  pv:  {
+    immediate: "PV = PMT · a⌐n|i = PMT · (1 − vⁿ) / i",
+    due:       "PV = PMT · ä⌐n|i = PMT · (1 − vⁿ) · (1+i) / i",
+    deferred:  "PV = v^d · PMT · a⌐n|i",
+  },
+  fv:  {
+    immediate: "FV = PMT · s⌐n|i = PMT · ((1+i)ⁿ − 1) / i",
+    due:       "FV = PMT · s̈⌐n|i = PMT · ((1+i)ⁿ − 1) · (1+i) / i",
+    deferred:  "FV = PMT · s⌐n|i  (accumulated at end of payment stream)",
+  },
+  pmt: {
+    immediate: "PMT = PV / a⌐n|i    or    PMT = FV / s⌐n|i",
+    due:       "PMT = PV / ä⌐n|i    or    PMT = FV / s̈⌐n|i",
+    deferred:  "PMT = PV · (1+i)^d / a⌐n|i    or    PMT = FV / s⌐n|i",
+  },
+  i:   {
+    immediate: "Find i  :  PMT · a⌐n|i = PV  (bisection)",
+    due:       "Find i  :  PMT · ä⌐n|i = PV  (bisection)",
+    deferred:  "Find i  :  v^d · PMT · a⌐n|i = PV  (bisection)",
+  },
+  n:   {
+    immediate: "n = −ln(1 − PV·i/PMT) / ln(1+i)    [from PV]",
+    due:       "n = −ln(1 − PV·i/(PMT·(1+i))) / ln(1+i)    [from PV]",
+    deferred:  "n = −ln(1 − (PV·(1+i)^d/PMT)·i) / ln(1+i)    [from PV]",
+  },
+};
+
+const SOLVE_LABELS: Record<SolveFor, string> = {
+  pv:  "PV",
+  fv:  "FV",
+  pmt: "PMT",
+  i:   "Rate i",
+  n:   "# Pmts n",
+};
+
+const SOLVED_FULL_LABELS: Record<SolveFor, string> = {
+  pv:  "Present Value (PV)",
+  fv:  "Future Value (FV)",
+  pmt: "Payment (PMT)",
+  i:   "Effective Annual Rate (i)",
+  n:   "Number of Payments (n)",
+};
+
+// Dynamic label for the n field depending on payment frequency
+const N_FIELD_LABELS: Record<number, string> = {
+  12: "Number of months",
+  6:  "Number of bimonths (every 2 mo.)",
+  4:  "Number of quarters (every 3 mo.)",
+  2:  "Number of semesters (every 6 mo.)",
+  1:  "Number of years",
 };
 
 function AnnuityPanel() {
-  const [type,    setType]    = useState("immediate");
-  const [pmt,     setPmt]     = useState(100);
-  const [i,       setI]       = useState(5);
-  const [freq,    setFreq]    = useState(1);    // anual por defecto
-  const [n,       setN]       = useState(20);
-  const [d,       setD]       = useState(5);
+  // ── Annuity type ──────────────────────────────────────────────────────────
+  const [annType,  setAnnType]  = useState<AnnType>("immediate");
+
+  // ── What to solve for ─────────────────────────────────────────────────────
+  const [solveFor, setSolveFor] = useState<SolveFor>("pv");
+
+  // ── Reference variable when solving PMT / i / n ───────────────────────────
+  const [refType,  setRefType]  = useState<RefType>("pv");
+
+  // ── All five input values ─────────────────────────────────────────────────
+  const [pmt,   setPmt]   = useState(100);
+  const [iAnn,  setIAnn]  = useState(5);      // effective annual rate (%)
+  const [n,     setN]     = useState(20);
+  const [pvRef, setPvRef] = useState(1500);   // reference PV when solving PMT/i/n
+  const [fvRef, setFvRef] = useState(2600);   // reference FV when solving PMT/i/n
+  const [freq,  setFreq]  = useState(1);
+  const [d,     setD]     = useState(5);
+
+  // ── API state ─────────────────────────────────────────────────────────────
   const [result,  setResult]  = useState<AnnuityResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const needsRef = (["pmt", "i", "n"] as SolveFor[]).includes(solveFor);
+
+  const resetResult = () => { setResult(null); setError(null); };
+
+  const handleSolveTab = (s: SolveFor) => {
+    setSolveFor(s); resetResult();
+  };
+
+  const handleAnnType = (t: AnnType) => {
+    setAnnType(t); resetResult();
+  };
+
+  // ── API call ──────────────────────────────────────────────────────────────
   const calculate = async () => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
-      // Enviamos freq al backend — él hace la conversión i_anual → i_periodo
-      const res = await api.annuity({ type, pmt, i: i / 100, n, freq, d });
+      // Build the request body: omit the field that is being solved for.
+      const body: Record<string, unknown> = {
+        type:  annType,
+        solve: solveFor,
+        freq,
+        d,
+        ref: refType,
+      };
+
+      if (solveFor !== "pmt") body.pmt = pmt;
+      if (solveFor !== "i")   body.i   = iAnn / 100;
+      if (solveFor !== "n")   body.n   = n;
+
+      // Provide the reference value when solving for PMT, i, or n
+      if (needsRef) {
+        if (refType === "pv") body.pv = pvRef;
+        else                  body.fv = fvRef;
+      }
+
+      const res = await api.annuity(body);
       setResult(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al conectar con el backend");
-    } finally {
-      setLoading(false);
+    } finally { setLoading(false); }
+  };
+
+  // ── Format the solved value for the large number display ─────────────────
+  const formatPrimary = (r: AnnuityResult): string => {
+    switch (r.solved) {
+      case "pv":  return "$" + fmt(r.pv);
+      case "fv":  return "$" + fmt(r.fv);
+      case "pmt": return "$" + fmt(r.pmt);
+      case "i":   return fmtPct(r.i_annual);
+      case "n":   return r.n.toFixed(4) + " pmts";
     }
   };
 
+  // ── Current formula to show ───────────────────────────────────────────────
+  const formulaText = result
+    ? result.formula
+    : STATIC_FORMULA[solveFor][annType];
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div>
+      {/* Annuity-type tabs */}
       <div className="tabs">
-        {[["immediate","Vencida"],["due","Anticipada"],["deferred","Diferida"]].map(([k,v]) => (
-          <div key={k} className={`tab ${type === k ? "active" : ""}`}
-            onClick={() => { setType(k); setResult(null); setError(null); }}>{v}</div>
+        {(["immediate","due","deferred"] as AnnType[]).map(k => (
+          <div key={k}
+            className={`tab ${annType === k ? "active" : ""}`}
+            onClick={() => handleAnnType(k)}>
+            {{ immediate:"Immediate (Vencida)", due:"Due (Anticipada)", deferred:"Deferred (Diferida)" }[k]}
+          </div>
         ))}
       </div>
-      {result && <div className="formula">{result.formula}</div>}
+
+      {/* FM formula bar */}
+      <div className="formula">{formulaText}</div>
+
+      {/* Solve-for strip */}
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize:9, letterSpacing:"0.15em", textTransform:"uppercase",
+                      color:"var(--gray-mid)", marginBottom:8 }}>
+          Solve for
+        </div>
+        <div className="solve-tabs">
+          {(Object.keys(SOLVE_LABELS) as SolveFor[]).map(k => (
+            <div key={k}
+              className={`solve-tab ${solveFor === k ? "active" : ""}`}
+              onClick={() => handleSolveTab(k)}>
+              {SOLVE_LABELS[k]}
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="grid-2">
+        {/* ── Input card ──────────────────────────────────────────────── */}
         <div className="card">
-          <div className="card-title">Parámetros</div>
+          <div className="card-title">Parameters</div>
 
-          <div className="field"><label>Pago PMT ($)</label>
-            <input type="number" value={pmt} onChange={e => setPmt(parseFloat(e.target.value))} />
-          </div>
-
-          <div className="field"><label>Tasa efectiva anual (%)</label>
-            <input type="number" step="0.01" value={i} onChange={e => setI(parseFloat(e.target.value))} />
-          </div>
-
-          {/* Frecuencia de pago — el backend convierte la tasa automáticamente */}
-          <div className="field">
-            <label>Frecuencia de pago</label>
-            <select value={freq} onChange={e => { setFreq(parseInt(e.target.value)); setResult(null); }}>
-              <option value="12">Mensual (cada mes)</option>
-              <option value="6">Bimestral (cada 2 meses)</option>
-              <option value="4">Trimestral (cada 3 meses)</option>
-              <option value="2">Semestral (cada 6 meses)</option>
-              <option value="1">Anual (cada año)</option>
-            </select>
-          </div>
-
-          {/* Label dinámico según frecuencia */}
-          <div className="field">
-            <label>{FREQ_N_LABEL[freq] ?? "Número de pagos"}</label>
-            <input type="number" value={n} onChange={e => setN(parseFloat(e.target.value))} />
-          </div>
-
-          {type === "deferred" && (
+          {/* Payment PMT — hidden when solving for PMT */}
+          {solveFor !== "pmt" ? (
             <div className="field">
-              <label>Diferimiento d (períodos)</label>
-              <input type="number" value={d} onChange={e => setD(parseFloat(e.target.value))} />
+              <label>Payment PMT ($)</label>
+              <input type="number" step="0.01" value={pmt}
+                onChange={e => setPmt(parseFloat(e.target.value))} />
+            </div>
+          ) : (
+            <div className="field field-solved">
+              <label>Payment PMT  ← solving</label>
+              <input type="text" disabled value="?" style={{ color:"var(--gold)", fontWeight:600 }} />
             </div>
           )}
 
-          <button className={`btn ${loading ? "loading" : ""}`} onClick={calculate} disabled={loading}>
-            {loading ? "Calculando..." : "▸ Calcular"}
+          {/* Effective annual rate — hidden when solving for i */}
+          {solveFor !== "i" ? (
+            <div className="field">
+              <label>Effective Annual Rate (%)</label>
+              <input type="number" step="0.01" value={iAnn}
+                onChange={e => setIAnn(parseFloat(e.target.value))} />
+            </div>
+          ) : (
+            <div className="field field-solved">
+              <label>Effective Annual Rate i  ← solving</label>
+              <input type="text" disabled value="?" style={{ color:"var(--gold)", fontWeight:600 }} />
+            </div>
+          )}
+
+          {/* Number of payments — hidden when solving for n */}
+          {solveFor !== "n" ? (
+            <div className="field">
+              <label>{N_FIELD_LABELS[freq] ?? "Number of payments"}</label>
+              <input type="number" value={n}
+                onChange={e => setN(parseFloat(e.target.value))} />
+            </div>
+          ) : (
+            <div className="field field-solved">
+              <label>Number of Payments n  ← solving</label>
+              <input type="text" disabled value="?" style={{ color:"var(--gold)", fontWeight:600 }} />
+            </div>
+          )}
+
+          {/* Payment frequency */}
+          <div className="field">
+            <label>Payment frequency</label>
+            <select value={freq} onChange={e => { setFreq(parseInt(e.target.value)); resetResult(); }}>
+              <option value="12">Monthly (12/year)</option>
+              <option value="6">Bimonthly (6/year)</option>
+              <option value="4">Quarterly (4/year)</option>
+              <option value="2">Semiannual (2/year)</option>
+              <option value="1">Annual (1/year)</option>
+            </select>
+          </div>
+
+          {/* Deferral period — only for deferred annuities */}
+          {annType === "deferred" && (
+            <div className="field">
+              <label>Deferral d (periods)</label>
+              <input type="number" min="1" value={d}
+                onChange={e => setD(parseFloat(e.target.value))} />
+            </div>
+          )}
+
+          {/* Reference value — only when solving PMT, i, or n */}
+          {needsRef && (
+            <>
+              <div style={{ borderTop:"1px solid var(--rule)", margin:"8px 0 16px",
+                            paddingTop:14 }}>
+                <div style={{ fontSize:9, letterSpacing:"0.15em", textTransform:"uppercase",
+                              color:"var(--gray-light)", marginBottom:12 }}>
+                  Known reference value
+                </div>
+                <div className="field" style={{ marginBottom:12 }}>
+                  <label>Reference variable</label>
+                  <select value={refType}
+                    onChange={e => { setRefType(e.target.value as RefType); resetResult(); }}>
+                    <option value="pv">Present Value (PV) at t=0</option>
+                    <option value="fv">Future Value (FV) at end of payments</option>
+                  </select>
+                </div>
+                {refType === "pv" ? (
+                  <div className="field">
+                    <label>Present Value ($)</label>
+                    <input type="number" step="0.01" value={pvRef}
+                      onChange={e => setPvRef(parseFloat(e.target.value))} />
+                  </div>
+                ) : (
+                  <div className="field">
+                    <label>Future Value ($)</label>
+                    <input type="number" step="0.01" value={fvRef}
+                      onChange={e => setFvRef(parseFloat(e.target.value))} />
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          <button
+            className={`btn ${loading ? "loading" : ""}`}
+            onClick={calculate}
+            disabled={loading}>
+            {loading ? "Calculating..." : "▸ Calculate"}
           </button>
           {error && <div className="error-box">⚠ {error}</div>}
         </div>
 
+        {/* ── Result card ─────────────────────────────────────────────── */}
         <div>
           {result ? (
             <div className="result-box">
-              {/* Etiqueta explícita: siempre "Valor Presente" */}
-              <div className="result-label">Valor Presente (PV)</div>
-              <div className="result-value">${fmt(result.pv)}</div>
-
-              {/* Tipo y frecuencia de la anualidad */}
-              <div style={{ fontSize:10, color:"rgba(255,255,255,0.45)", marginBottom:12,
-                            letterSpacing:"0.1em", textTransform:"uppercase" }}>
+              {/* Primary solved value */}
+              <div className="result-label">
+                ★ Solved: {SOLVED_FULL_LABELS[result.solved]}
+              </div>
+              <div className="result-value">{formatPrimary(result)}</div>
+              <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)",
+                            letterSpacing:"0.1em", textTransform:"uppercase",
+                            marginBottom:16 }}>
                 {result.label}
               </div>
 
               <hr className="result-divider" />
-              <div className="result-detail">
-                {/* Tasa por período — dato clave para el FM */}
-                <span className="result-hl">Tasa {result.freq_label}</span> = {fmtPct(result.i_periodo)}<br />
-                <span className="result-hl">Valor acumulado (FV)</span> = ${fmt(result.fv)}<br />
-                <span className="result-hl">Suma total de pagos</span> = ${fmt(result.total_pmts)}<br />
-                <span className="result-hl">Interés total generado</span> = ${fmt(result.total_interest)}
+
+              {/* All five variables */}
+              <div style={{ marginBottom:12 }}>
+                {/* PV */}
+                <div className="result-row">
+                  <span className="result-row-key">Present Value (PV)</span>
+                  <span className={`result-row-val ${result.solved === "pv" ? "gold" : ""}`}>
+                    ${fmt(result.pv)}
+                  </span>
+                </div>
+                {/* FV */}
+                <div className="result-row">
+                  <span className="result-row-key">Future Value (FV)</span>
+                  <span className={`result-row-val ${result.solved === "fv" ? "gold" : ""}`}>
+                    ${fmt(result.fv)}
+                  </span>
+                </div>
+                {/* PMT */}
+                <div className="result-row">
+                  <span className="result-row-key">Payment (PMT)</span>
+                  <span className={`result-row-val ${result.solved === "pmt" ? "gold" : ""}`}>
+                    ${fmt(result.pmt)}
+                  </span>
+                </div>
+                {/* i annual */}
+                <div className="result-row">
+                  <span className="result-row-key">Annual Rate (i)</span>
+                  <span className={`result-row-val ${result.solved === "i" ? "gold" : ""}`}>
+                    {fmtPct(result.i_annual)}
+                  </span>
+                </div>
+                {/* i period */}
+                <div className="result-row">
+                  <span className="result-row-key">Period Rate (i_{result.freq_label})</span>
+                  <span className="result-row-val">
+                    {fmtPct(result.i_period, 6)}
+                  </span>
+                </div>
+                {/* Force of interest */}
+                <div className="result-row">
+                  <span className="result-row-key">Force of interest (δ)</span>
+                  <span className="result-row-val">
+                    {fmtPct(result.delta)}
+                  </span>
+                </div>
+                {/* n */}
+                <div className="result-row">
+                  <span className="result-row-key">Payments (n)</span>
+                  <span className={`result-row-val ${result.solved === "n" ? "gold" : ""}`}>
+                    {result.n.toFixed(4)}
+                    {result.solved === "n" && !Number.isInteger(result.n) && (
+                      <span style={{ fontSize:9, color:"rgba(255,255,255,0.3)",
+                                     marginLeft:8 }}>
+                        ≈ {Math.ceil(result.n)} full periods
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              <hr className="result-divider" />
+
+              {/* Totals */}
+              <div className="result-row">
+                <span className="result-row-key">Σ Payments</span>
+                <span className="result-row-val">${fmt(result.total_pmts)}</span>
+              </div>
+              <div className="result-row">
+                <span className="result-row-key">Total interest</span>
+                <span className="result-row-val">${fmt(result.total_interest)}</span>
               </div>
             </div>
           ) : (
             <div className="empty-state">
               <div className="empty-icon">◎</div>
-              Ingresa parámetros y presiona Calcular
+              Select "Solve for", fill in the known values, then press Calculate
             </div>
           )}
         </div>
@@ -484,13 +762,13 @@ function AnnuityPanel() {
 }
 
 // -----------------------------------------------------------------------------
-// 5.3 AmortPanel — llama a POST /amortization
+// 5.3 AmortPanel
 // -----------------------------------------------------------------------------
 function AmortPanel() {
   const [pvInput,      setPvInput]      = useState(10000);
   const [iInput,       setIInput]       = useState(6);
-  const [nInput,       setNInput]       = useState(24);   // meses por defecto
-  const [freq,         setFreq]         = useState(12);   // mensual por defecto
+  const [nInput,       setNInput]       = useState(24);
+  const [freq,         setFreq]         = useState(12);
   const [type,         setType]         = useState("french");
   const [extraMap,     setExtraMap]     = useState<ExtraMap>({});
   const [pendingT,     setPendingT]     = useState("");
@@ -501,57 +779,41 @@ function AmortPanel() {
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState<string | null>(null);
 
-  // Llama al backend con el mapa de abonos actual
   const fetchAmort = async (map: ExtraMap, isBase = false) => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
-      // El backend recibe:
-      //   i: tasa efectiva ANUAL en decimal  (ej: 6% → 0.06)
-      //   freq: pagos por año               (ej: 12 = mensual)
-      //   n: número de períodos en la frecuencia elegida
-      // El backend hace la conversión: i_periodo = (1+i)^(1/freq) - 1
       const res = await api.amortization({
         pv: pvInput, i: iInput / 100, n: nInput, freq, scheme: type,
         extra_map: Object.fromEntries(Object.entries(map).map(([k,v]) => [String(k), v])),
       });
-      if (isBase) {
-        setBaseResult(res);
-        setExtraResult(null);
-        setExtraMap({});
-      } else {
-        setExtraResult(res);
-      }
+      if (isBase) { setBaseResult(res); setExtraResult(null); setExtraMap({}); }
+      else        { setExtraResult(res); }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al conectar con el backend");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   const addExtra = async () => {
-    const t      = parseInt(pendingT);
-    const amount = parseFloat(pendingAmt);
+    const t = parseInt(pendingT), amount = parseFloat(pendingAmt);
     if (isNaN(t) || isNaN(amount) || amount <= 0 || t < 1 || t > nInput) return;
     const newMap = { ...extraMap, [t]: (extraMap[t] ?? 0) + amount };
     setExtraMap(newMap);
-    setAddedMsg(`✓ Abono de $${fmt(amount)} en período ${t}`);
+    setAddedMsg(`✓ Extra payment of $${fmt(amount)} at period ${t}`);
     setPendingT(""); setPendingAmt("");
     setTimeout(() => setAddedMsg(""), 3000);
     await fetchAmort(newMap);
   };
 
   const removeExtra = async (t: number) => {
-    const newMap = { ...extraMap };
-    delete newMap[t];
-    setExtraMap(newMap);
+    const newMap = { ...extraMap }; delete newMap[t]; setExtraMap(newMap);
     if (Object.keys(newMap).length === 0) { setExtraResult(null); return; }
     await fetchAmort(newMap);
   };
 
-  const displayRows  = extraResult?.rows ?? baseResult?.rows ?? [];
-  const hasExtras    = Object.keys(extraMap).length > 0;
-  const totalExtras  = Object.values(extraMap).reduce((s, v) => s + v, 0);
+  const displayRows = extraResult?.rows ?? baseResult?.rows ?? [];
+  const hasExtras   = Object.keys(extraMap).length > 0;
+  const totalExtras = Object.values(extraMap).reduce((s, v) => s + v, 0);
+
   const baseSummary: AmortSummary | null = baseResult
     ? { total_interest: baseResult.total_interest, total_pmt: baseResult.total_pmt,
         pv: pvInput, periods: baseResult.periods }
@@ -714,7 +976,7 @@ function AmortPanel() {
 }
 
 // -----------------------------------------------------------------------------
-// 5.4 RateConvPanel — llama a POST /rates
+// 5.4 RateConvPanel
 // -----------------------------------------------------------------------------
 function RateConvPanel() {
   const [rate,    setRate]    = useState(6);
@@ -723,18 +985,14 @@ function RateConvPanel() {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
-  // Conversión en tiempo real al cambiar cualquier input
   const calculate = async (r = rate, mVal = m) => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const res = await api.rates({ rate: r / 100, m: mVal, conv: "nominal" });
       setResult(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al conectar con el backend");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   return (
@@ -805,7 +1063,7 @@ const COMING_SOON = ["Bond Pricer","Yield Curve","Duration & Convexity","Immuniz
 
 const PAGE_META: Record<PanelId, { eyebrow:string; title:string; desc:string; fm:string }> = {
   tvm:     { eyebrow:"Sección 1 & 2 — FM", title:"Valor del Dinero\nen el Tiempo",   desc:"PV y FV bajo cualquier convención de tasa. Calculado por el backend Python.", fm:"FM Sections 1–2: Interest Measurement" },
-  annuity: { eyebrow:"Sección 2 — FM",     title:"Valuación de\nAnualidades",         desc:"Vencidas, anticipadas y diferidas. Motor de cálculo en Python / FastAPI.",      fm:"FM Section 2: Annuities" },
+  annuity: { eyebrow:"Sección 2 — FM",     title:"Valuación de\nAnualidades",         desc:"Solve for PV, FV, PMT, interest rate, or number of payments — for immediate, due, and deferred annuities.", fm:"FM Section 2: Annuities" },
   amort:   { eyebrow:"Sección 2 — FM",     title:"Tablas de\nAmortización",           desc:"Tabla período a período con abonos extraordinarios. Cálculo en Python.",        fm:"FM Section 2: Loan Repayment" },
   rates:   { eyebrow:"Sección 1 — FM",     title:"Conversión de\nTasas de Interés",  desc:"Equivalencias entre tasas. Respuesta en tiempo real desde el backend.",         fm:"FM Section 1: Interest Rate Measurement" },
 };
@@ -828,7 +1086,6 @@ export default function App() {
       <header className="header">
         <span className="header-logo">Fixed Income Risk Analyzer</span>
         <span className="header-module">Módulo 1 — Time Value Engine</span>
-        {/* Indicador visual de que el backend está activo */}
         <span className="api-indicator">
           <span className="api-dot"></span>
           Python API
